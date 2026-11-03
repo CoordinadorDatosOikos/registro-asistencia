@@ -64,6 +64,8 @@ button { font-family: inherit; touch-action: manipulation; }
 .g-load { display: flex; align-items: center; gap: 12px; font-size: .9rem; opacity: .9; } .g-err { background: rgba(248,113,113,.2); border: 1px solid rgba(248,113,113,.5); color: #fee2e2; border-radius: 14px; padding: 12px 14px; font-size: .84rem; margin-bottom: 12px; }
 .ses-box { margin-bottom: 16px; padding-bottom: 14px; border-bottom: 1px solid rgba(255,255,255,.22); }
 .ses-row { display: flex; gap: 8px; margin-top: 10px; } .ses-row button { flex: 1; border-radius: 14px; padding: 13px 8px; min-height: 48px; font-family: 'Outfit'; font-weight: 800; font-size: .82rem; letter-spacing: .04em; cursor: pointer; border: 1.5px solid rgba(255,255,255,.5); }
+.ses-sal { width: 100%; margin-top: 10px; border: none; border-radius: 14px; padding: 15px 8px; min-height: 52px; background: #34d399; color: #022c1e; font-family: 'Outfit'; font-weight: 800; font-size: .92rem; letter-spacing: .05em; cursor: pointer; }
+.ses-nota { margin: 12px 0 0; font-size: .76rem; line-height: 1.5; opacity: .85; }
 .ses-go { background: #fff; color: var(--primary-blue); border-color: #fff !important; } .ses-out { background: rgba(255,255,255,.1); color: #fff; }
 .emb-box { margin-bottom: 14px; background: rgba(255,170,0,.18); border: 1px solid rgba(255,200,80,.7); border-radius: 14px; padding: 12px 14px; font-size: .82rem; line-height: 1.55; }
 .emb-box button { margin-top: 8px; margin-right: 8px; background: #fff; color: var(--primary-blue); border: none; border-radius: 10px; padding: 9px 14px; font-weight: 800; font-size: .8rem; cursor: pointer; }
@@ -265,8 +267,10 @@ button { font-family: inherit; touch-action: manipulation; }
         <div id="idForm" class="hidden">
           <div class="ses-box hidden" id="sesBox">
             <label class="lbl" for="selSesion">Personas con sesión abierta en este dispositivo</label>
-            <div class="g-sel"><select id="selSesion"></select></div>
+            <div class="g-sel"><select id="selSesion" onchange="actualizarBotonesSesion()"></select></div>
+            <button class="ses-sal hidden" id="btnSalidaIni" onclick="sesionContinuar()">REGISTRAR SALIDA</button>
             <div class="ses-row"><button class="ses-go" onclick="sesionContinuar()">CONTINUAR</button><button class="ses-out" onclick="sesionCerrar()">CERRAR SESIÓN</button></div>
+            <p class="ses-nota">¿Otra persona va a ingresar? Elige su sala y nombre más abajo y registra su ingreso desde este mismo dispositivo.</p>
           </div>
           <div class="g-field"><label class="lbl" for="selSala">Sala de ventas</label>
             <div class="g-sel"><select id="selSala" onchange="onSala()"><option value="">Selecciona tu sala</option></select></div></div>
@@ -511,12 +515,17 @@ if (DEV.emb) { $('embNom').textContent = DEV.emb; $('embBox').classList.remove('
 let SES = [];
 function sesLocal() { return (store.get('oikos_geo_sesiones') || []).filter(s => s && s.ext && Date.now() - (s.ms || 0) < SESION_MAX_MS); }
 function sesGuardar(l) { SES = l; store.set('oikos_geo_sesiones', l); pintarSesiones(); }
-function sesDeServidor(l) { return l.map(s => ({ ext: s.ext, asesor: s.asesor, sala: s.sala, cargo: s.cargo, ms: s.ms || Date.now() })); }
+const FASE_TXT = { SIN_ENTRADA: 'Sin ingreso', EN_JORNADA: 'En jornada', COMPLETA: 'Jornada completa' };
+function sesDeServidor(l) { return l.map(s => { const prev = SES.find(x => x.ext === s.ext) || {}; return { ext: s.ext, asesor: s.asesor, sala: s.sala, cargo: s.cargo, ms: s.ms || Date.now(), fase: prev.fase || '', entradaTxt: prev.entradaTxt || '' }; }); }
+// Cada persona del dispositivo recuerda si está en jornada, para habilitar su botón de salida en el inicio.
+function sesFase(ext, fase, r) { const s = SES.find(x => x.ext === ext); if (!s) return; s.fase = fase; s.entradaTxt = (r && r.entradaTxt) || ''; store.set('oikos_geo_sesiones', SES); pintarSesiones(); }
+function refrescarFases() { SES.slice(0, 8).forEach(s => api('GET', { action: 'estado', ext: s.ext }).then(d => { if (d && d.success) sesFase(s.ext, d.fase, d.registro); }).catch(() => {})); }
+function actualizarBotonesSesion() { const s = SES.find(x => x.ext === $('selSesion').value); $('btnSalidaIni').classList.toggle('hidden', !(s && s.fase === 'EN_JORNADA')); }
 function pintarSesiones() {
-  const box = $('sesBox'), sel = $('selSesion'); sel.innerHTML = '';
-  SES.forEach(s => { const o = document.createElement('option'); o.value = s.ext; o.textContent = s.asesor + ' · ' + s.sala; sel.appendChild(o); });
-  if (user) sel.value = user.ext;
-  box.classList.toggle('hidden', !SES.length);
+  const box = $('sesBox'), sel = $('selSesion'), prev = sel.value; sel.innerHTML = '';
+  SES.forEach(s => { const o = document.createElement('option'); o.value = s.ext; o.textContent = s.asesor + ' · ' + s.sala + (s.fase ? ' — ' + FASE_TXT[s.fase] + (s.fase === 'EN_JORNADA' && s.entradaTxt ? ' ' + s.entradaTxt.slice(0, 5) : '') : ''); sel.appendChild(o); });
+  const quiere = user ? user.ext : prev; if (quiere && SES.some(s => s.ext === quiere)) sel.value = quiere;
+  box.classList.toggle('hidden', !SES.length); actualizarBotonesSesion();
 }
 async function sesCargar() {
   SES = sesLocal();
@@ -524,9 +533,10 @@ async function sesCargar() {
     const d = await api('GET', { action: 'sesiones', dev: DEV.id });
     if (d && d.success) sesGuardar(sesDeServidor(d.sesiones)); else pintarSesiones();
   } catch (e) { pintarSesiones(); reportar('sesiones_cargar', e); }
+  refrescarFases();
 }
 function sesAbrir(u) {
-  sesGuardar(SES.filter(s => s.ext !== u.ext).concat([{ ext: u.ext, asesor: u.asesor, sala: u.sala, cargo: u.cargo, ms: Date.now() }]));
+  sesGuardar(SES.filter(s => s.ext !== u.ext).concat([{ ext: u.ext, asesor: u.asesor, sala: u.sala, cargo: u.cargo, ms: Date.now(), fase: '', entradaTxt: '' }]));
   api('POST', null, { accion: 'sesion_abrir', ext: u.ext, dev: devPayload() }).then(d => { if (d && d.success) sesGuardar(sesDeServidor(d.sesiones)); }).catch(e => reportar('sesion_abrir', e));
 }
 function sesQuitar(ext, motivo) {
@@ -731,7 +741,7 @@ function pasos(f) {
   $('sl1').classList.toggle('done', n > 1); $('sl2').classList.toggle('done', n > 2);
 }
 function aplicarEstado(f, r) {
-  fase = f; reg = r; foto = ''; resetFotoUI(); pasos(f);
+  fase = f; reg = r; foto = ''; resetFotoUI(); pasos(f); if (user) sesFase(user.ext, f, r);
   ['pEntrada', 'pSalida', 'pCompleta'].forEach(i => $(i).classList.add('hidden'));
   const b = $('jBadge');
   if (f === 'SIN_ENTRADA') { b.className = 'estado-badge eb-sin'; b.textContent = 'Sin entrada'; $('pEntrada').classList.remove('hidden'); }
@@ -919,8 +929,8 @@ async function registrar(tipo) {
     loading(false);
     if (d.success) {
       aplicarEstado(d.fase, d.registro);
-      if (tipo === 'entrada' && d.alerta) mostrarRes('warn', 'Ingreso registrado con alerta', 'Tu ingreso quedó guardado, pero estás fuera del perímetro de la sala (' + d.distancia + ' m del centro; permitido ' + d.radio + ' m). Se notificó a coordinación para validarlo.', [['Hora', d.registro.entradaTxt], ['Distancia a la sala', d.distancia + ' m']]);
-      else if (tipo === 'entrada') mostrarRes('ok', 'Ingreso registrado', 'Tu ingreso quedó guardado. Esta ubicación es ahora tu punto de referencia para la salida.', [['Hora', d.registro.entradaTxt], ['Rango de salida', CFG.radio + ' m']]);
+      if (tipo === 'entrada' && d.alerta) mostrarRes('warn', 'Ingreso registrado con alerta', 'Tu ingreso quedó guardado, pero estás fuera del perímetro de la sala (' + d.distancia + ' m del centro; permitido ' + d.radio + ' m). Se notificó a coordinación para validarlo. Volverás al inicio: si alguien más va a ingresar, regístralo ahí.', [['Hora', d.registro.entradaTxt], ['Distancia a la sala', d.distancia + ' m']], { cuenta: 8, alCerrar: pantallaInicio });
+      else if (tipo === 'entrada') mostrarRes('ok', 'Ingreso registrado', 'Tu ingreso quedó guardado y esta ubicación es tu punto de referencia para la salida. Volverás al inicio: si alguien más va a ingresar, regístralo ahí. Tu salida la registras desde el inicio con el botón REGISTRAR SALIDA.', [['Hora', d.registro.entradaTxt], ['Rango de salida', CFG.radio + ' m']], { cuenta: 8, alCerrar: pantallaInicio });
       else mostrarRes('ok', 'Salida registrada', 'Tu salida quedó registrada correctamente. Volverás a la pantalla inicial automáticamente.', [['Ingreso', d.registro.entradaTxt], ['Salida', d.registro.salidaTxt], ['Distancia al ingreso', (d.registro.distanciaSalida != null ? d.registro.distanciaSalida : 0) + ' m']], { cuenta: 6, alCerrar: volverInicio });
     } else if (d.code === 'FUERA_DE_RANGO') {
       if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
